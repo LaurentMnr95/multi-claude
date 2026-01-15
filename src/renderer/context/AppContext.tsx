@@ -1,5 +1,15 @@
-import React, { createContext, useContext, useState, useCallback, useEffect } from 'react'
-import { Worktree, TerminalInstance, SplitLayoutNode, SplitDirection, WorktreeSplitLayout } from '../../shared/types'
+import React, { createContext, useContext, useState, useCallback, useEffect, useRef } from 'react'
+import { Worktree, TerminalInstance, SplitLayoutNode, SplitDirection, WorktreeSplitLayout, RepoSessionState, AppSettings, ClaudeStatus } from '../../shared/types'
+
+// Track terminal/claude numbering per worktree
+interface WorktreeCounters {
+  [worktreePath: string]: { terminal: number; claude: number }
+}
+
+// Track last active terminal per worktree (for restoring on switch)
+interface ActiveTerminalPerWorktree {
+  [worktreePath: string]: string | null
+}
 
 interface AppState {
   repoPath: string | null
@@ -9,22 +19,31 @@ interface AppState {
   activeTerminalId: string | null
   splitLayouts: WorktreeSplitLayout
   error: string | null
+  recentRepos: RepoSessionState[]
+  settings: AppSettings | null
+  showSettingsModal: boolean
+  terminalCounters: WorktreeCounters
+  activeTerminalPerWorktree: ActiveTerminalPerWorktree
 }
 
 interface AppContextValue extends AppState {
   // Repo actions
   openRepo: () => Promise<void>
+  openRecentRepo: (repoPath: string) => Promise<void>
 
   // Worktree actions
   selectWorktree: (path: string) => void
-  createWorktree: (branch: string, path: string) => Promise<void>
+  createWorktree: (branch: string, path: string, createBranch?: boolean, startPoint?: string) => Promise<void>
+  removeWorktree: (worktreePath: string) => Promise<void>
   refreshWorktrees: () => Promise<void>
 
   // Terminal actions
   addTerminal: (terminal: TerminalInstance, splitFromId?: string | null) => void
   removeTerminal: (id: string) => void
   setActiveTerminal: (id: string | null) => void
-  setClaudeSession: (id: string, isClaude: boolean) => void
+  setClaudeSession: (id: string, isClaude: boolean, status?: ClaudeStatus) => void
+  getNextTerminalNumber: (worktreePath: string) => number
+  getNextClaudeNumber: (worktreePath: string) => number
 
   // Split layout actions
   splitTerminal: (terminalId: string, direction: SplitDirection) => Promise<void>
@@ -35,6 +54,18 @@ interface AppContextValue extends AppState {
   // Helpers
   getTerminalsForWorktree: (worktreePath: string) => TerminalInstance[]
   clearError: () => void
+
+  // Settings actions
+  loadSettings: () => Promise<void>
+  updateSettings: (settings: Partial<AppSettings>) => Promise<void>
+  openSettings: () => void
+  closeSettings: () => void
+
+  // IDE actions
+  openInIDE: (path: string) => Promise<void>
+
+  // Terminal actions
+  openInTerminal: (path: string) => Promise<void>
 }
 
 const AppContext = createContext<AppContextValue | null>(null)
@@ -48,7 +79,34 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     activeTerminalId: null,
     splitLayouts: {},
     error: null,
+    recentRepos: [],
+    settings: null,
+    showSettingsModal: false,
+    terminalCounters: {},
+    activeTerminalPerWorktree: {},
   })
+
+  // Track if we should skip saving (during restore)
+  const skipSaveRef = useRef(false)
+
+  // Track terminal/claude counters per worktree (using refs to avoid race conditions)
+  const terminalCountersRef = useRef<WorktreeCounters>({})
+
+  const getNextTerminalNumber = useCallback((worktreePath: string): number => {
+    if (!terminalCountersRef.current[worktreePath]) {
+      terminalCountersRef.current[worktreePath] = { terminal: 0, claude: 0 }
+    }
+    terminalCountersRef.current[worktreePath].terminal += 1
+    return terminalCountersRef.current[worktreePath].terminal
+  }, [])
+
+  const getNextClaudeNumber = useCallback((worktreePath: string): number => {
+    if (!terminalCountersRef.current[worktreePath]) {
+      terminalCountersRef.current[worktreePath] = { terminal: 0, claude: 0 }
+    }
+    terminalCountersRef.current[worktreePath].claude += 1
+    return terminalCountersRef.current[worktreePath].claude
+  }, [])
 
   const openRepo = useCallback(async () => {
     try {
@@ -72,13 +130,33 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   }, [])
 
   const selectWorktree = useCallback((path: string) => {
-    setState(s => ({ ...s, selectedWorktreePath: path }))
+    setState(s => {
+      // Save current active terminal for the current worktree
+      const newActivePerWorktree = { ...s.activeTerminalPerWorktree }
+      if (s.selectedWorktreePath && s.activeTerminalId) {
+        newActivePerWorktree[s.selectedWorktreePath] = s.activeTerminalId
+      }
+
+      // Restore active terminal for the new worktree, or pick first terminal
+      const terminalsForNewWorktree = s.terminals.filter(t => t.worktreePath === path)
+      const savedActiveId = newActivePerWorktree[path]
+      const newActiveId = savedActiveId && terminalsForNewWorktree.some(t => t.id === savedActiveId)
+        ? savedActiveId
+        : terminalsForNewWorktree[0]?.id || null
+
+      return {
+        ...s,
+        selectedWorktreePath: path,
+        activeTerminalId: newActiveId,
+        activeTerminalPerWorktree: newActivePerWorktree,
+      }
+    })
   }, [])
 
-  const createWorktree = useCallback(async (branch: string, path: string) => {
+  const createWorktree = useCallback(async (branch: string, path: string, createBranch?: boolean, startPoint?: string) => {
     if (!state.repoPath) return
     try {
-      const worktrees = await window.api.git.createWorktree(state.repoPath, branch, path)
+      const worktrees = await window.api.git.createWorktree(state.repoPath, branch, path, createBranch, startPoint)
       setState(s => ({
         ...s,
         worktrees,
@@ -102,6 +180,56 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       console.error('Failed to refresh worktrees:', err)
     }
   }, [state.repoPath])
+
+  const removeWorktree = useCallback(async (worktreePath: string) => {
+    if (!state.repoPath) return
+    try {
+      // Kill all terminals for this worktree first
+      const terminalsToKill = state.terminals.filter(t => t.worktreePath === worktreePath)
+      for (const terminal of terminalsToKill) {
+        await window.api.pty.kill(terminal.id)
+      }
+
+      // Remove the worktree
+      const worktrees = await window.api.git.removeWorktree(state.repoPath, worktreePath)
+
+      setState(s => {
+        // Clean up terminals for this worktree
+        const newTerminals = s.terminals.filter(t => t.worktreePath !== worktreePath)
+
+        // Clean up split layout for this worktree
+        const newSplitLayouts = { ...s.splitLayouts }
+        delete newSplitLayouts[worktreePath]
+
+        // Select a different worktree if the deleted one was selected
+        let newSelectedPath = s.selectedWorktreePath
+        if (s.selectedWorktreePath === worktreePath) {
+          newSelectedPath = worktrees[0]?.path || null
+        }
+
+        // Update active terminal if it was in the deleted worktree
+        let newActiveTerminalId = s.activeTerminalId
+        if (terminalsToKill.some(t => t.id === s.activeTerminalId)) {
+          newActiveTerminalId = newTerminals.find(t => t.worktreePath === newSelectedPath)?.id || null
+        }
+
+        return {
+          ...s,
+          worktrees,
+          selectedWorktreePath: newSelectedPath,
+          terminals: newTerminals,
+          activeTerminalId: newActiveTerminalId,
+          splitLayouts: newSplitLayouts,
+          error: null,
+        }
+      })
+    } catch (err) {
+      setState(s => ({
+        ...s,
+        error: err instanceof Error ? err.message : 'Failed to remove worktree',
+      }))
+    }
+  }, [state.repoPath, state.terminals])
 
   // Helper to add a terminal by splitting an existing one
   const addToLayoutBySplit = (
@@ -208,29 +336,47 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   }, [])
 
   const setActiveTerminal = useCallback((id: string | null) => {
-    setState(s => ({ ...s, activeTerminalId: id }))
+    setState(s => {
+      // Also update per-worktree tracking
+      if (id && s.selectedWorktreePath) {
+        return {
+          ...s,
+          activeTerminalId: id,
+          activeTerminalPerWorktree: {
+            ...s.activeTerminalPerWorktree,
+            [s.selectedWorktreePath]: id,
+          },
+        }
+      }
+      return { ...s, activeTerminalId: id }
+    })
   }, [])
 
-  const setClaudeSession = useCallback((id: string, isClaude: boolean) => {
+  const setClaudeSession = useCallback((id: string, isClaude: boolean, status?: ClaudeStatus) => {
+    // Find terminal first to get worktreePath for counter
+    const terminal = state.terminals.find(t => t.id === id)
+    if (!terminal) return
+
+    // Get next claude number outside setState if needed
+    const claudeNumber = isClaude && !terminal.title.startsWith('Claude')
+      ? getNextClaudeNumber(terminal.worktreePath)
+      : null
+
     setState(s => {
-      const terminal = s.terminals.find(t => t.id === id)
-      if (!terminal) return s
+      const term = s.terminals.find(t => t.id === id)
+      if (!term) return s
 
       // Update title if becoming a Claude session and title doesn't already say Claude
-      let newTitle = terminal.title
-      if (isClaude && !terminal.title.startsWith('Claude')) {
-        const claudeCount = s.terminals.filter(t => t.isClaudeSession && t.worktreePath === terminal.worktreePath).length + 1
-        newTitle = `Claude ${claudeCount}`
-      }
+      const newTitle = claudeNumber !== null ? `Claude ${claudeNumber}` : term.title
 
       return {
         ...s,
         terminals: s.terminals.map(t =>
-          t.id === id ? { ...t, isClaudeSession: isClaude, title: newTitle } : t
+          t.id === id ? { ...t, isClaudeSession: isClaude, title: newTitle, claudeStatus: status ?? t.claudeStatus } : t
         ),
       }
     })
-  }, [])
+  }, [state.terminals, getNextClaudeNumber])
 
   // Helper to find and split a terminal node in the layout
   const splitNodeInLayout = (
@@ -267,7 +413,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
     // Spawn a new PTY for the new terminal
     const ptyId = await window.api.pty.spawn({ worktreePath: terminal.worktreePath })
-    const termNumber = state.terminals.filter(t => t.worktreePath === terminal.worktreePath && !t.isClaudeSession).length + 1
+    const termNumber = getNextTerminalNumber(terminal.worktreePath)
 
     setState(s => {
       const currentLayout = s.splitLayouts[terminal.worktreePath]
@@ -280,6 +426,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           worktreePath: terminal.worktreePath,
           title: `Terminal ${termNumber}`,
           isClaudeSession: false,
+          claudeStatus: null,
         }],
         activeTerminalId: ptyId,
         splitLayouts: {
@@ -288,7 +435,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         },
       }
     })
-  }, [state.terminals])
+  }, [state.terminals, getNextTerminalNumber])
 
   // Helper to update ratio at a specific path in the layout
   const updateRatioInLayout = (layout: SplitLayoutNode, path: number[], ratio: number): SplitLayoutNode => {
@@ -395,10 +542,226 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     setState(s => ({ ...s, error: null }))
   }, [])
 
+  // Settings actions
+  const loadSettings = useCallback(async () => {
+    const settings = await window.api.settings.get()
+    setState(s => ({ ...s, settings }))
+  }, [])
+
+  const updateSettings = useCallback(async (settings: Partial<AppSettings>) => {
+    await window.api.settings.set(settings)
+    const updatedSettings = await window.api.settings.get()
+    setState(s => ({ ...s, settings: updatedSettings }))
+  }, [])
+
+  const openSettings = useCallback(() => {
+    setState(s => ({ ...s, showSettingsModal: true }))
+  }, [])
+
+  const closeSettings = useCallback(() => {
+    setState(s => ({ ...s, showSettingsModal: false }))
+  }, [])
+
+  const openInIDE = useCallback(async (path: string) => {
+    try {
+      await window.api.ide.openPath(path)
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err)
+      if (message === 'NO_IDE_CONFIGURED') {
+        setState(s => ({
+          ...s,
+          showSettingsModal: true,
+          error: 'Please configure your default IDE in settings',
+        }))
+      } else {
+        setState(s => ({
+          ...s,
+          error: message || 'Failed to open in IDE',
+        }))
+      }
+    }
+  }, [])
+
+  const openInTerminal = useCallback(async (path: string) => {
+    try {
+      await window.api.terminalApp.openPath(path)
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err)
+      if (message === 'NO_TERMINAL_CONFIGURED') {
+        setState(s => ({
+          ...s,
+          showSettingsModal: true,
+          error: 'Please configure your external terminal in settings',
+        }))
+      } else {
+        setState(s => ({
+          ...s,
+          error: message || 'Failed to open external terminal',
+        }))
+      }
+    }
+  }, [])
+
+  // Load recent repos and open a recent repo with session restore
+  const openRecentRepo = useCallback(async (repoPath: string) => {
+    try {
+      // Get saved session
+      const session = await window.api.store.getRepoSession(repoPath)
+
+      // Fetch fresh worktrees
+      const worktrees = await window.api.git.listWorktrees(repoPath)
+
+      if (!session) {
+        // No saved session, just open the repo fresh
+        setState(s => ({
+          ...s,
+          repoPath,
+          worktrees,
+          selectedWorktreePath: worktrees[0]?.path || null,
+          terminals: [],
+          activeTerminalId: null,
+          splitLayouts: {},
+          error: null,
+        }))
+        return
+      }
+
+      // Validate selectedWorktreePath still exists
+      const validSelectedPath = worktrees.some(w => w.path === session.selectedWorktreePath)
+        ? session.selectedWorktreePath
+        : worktrees[0]?.path || null
+
+      // Skip saving during restore
+      skipSaveRef.current = true
+
+      // Set repo state first
+      setState(s => ({
+        ...s,
+        repoPath,
+        worktrees,
+        selectedWorktreePath: validSelectedPath,
+        terminals: [],
+        activeTerminalId: null,
+        splitLayouts: {},
+        error: null,
+      }))
+
+      // Restore terminals by spawning new PTYs
+      const newTerminals: TerminalInstance[] = []
+      const terminalIdMap = new Map<string, string>() // old ID -> new ID
+
+      for (const savedTerminal of session.terminals) {
+        // Validate worktree still exists
+        if (!worktrees.some(w => w.path === savedTerminal.worktreePath)) {
+          continue
+        }
+
+        try {
+          const newPtyId = await window.api.pty.spawn({ worktreePath: savedTerminal.worktreePath })
+          newTerminals.push({
+            id: newPtyId,
+            worktreePath: savedTerminal.worktreePath,
+            title: savedTerminal.title,
+            isClaudeSession: savedTerminal.isClaudeSession,
+            claudeStatus: savedTerminal.claudeStatus ?? null,
+          })
+          // We'll need to map old terminal IDs in the layout to new ones
+          // For now, we'll rebuild the layout from scratch
+        } catch (err) {
+          console.error('Failed to restore terminal:', err)
+        }
+      }
+
+      // Rebuild split layouts with new terminal IDs
+      // For simplicity, we just create a layout based on restored terminals per worktree
+      const newSplitLayouts: WorktreeSplitLayout = {}
+      const terminalsByWorktree = new Map<string, TerminalInstance[]>()
+
+      for (const terminal of newTerminals) {
+        const existing = terminalsByWorktree.get(terminal.worktreePath) || []
+        existing.push(terminal)
+        terminalsByWorktree.set(terminal.worktreePath, existing)
+      }
+
+      for (const [worktreePath, terminals] of terminalsByWorktree) {
+        if (terminals.length === 1) {
+          newSplitLayouts[worktreePath] = { type: 'terminal', terminalId: terminals[0].id }
+        } else if (terminals.length > 1) {
+          // Create horizontal splits for multiple terminals
+          let layout: SplitLayoutNode = { type: 'terminal', terminalId: terminals[0].id }
+          for (let i = 1; i < terminals.length; i++) {
+            layout = {
+              type: 'split',
+              direction: 'horizontal',
+              ratio: 0.5,
+              first: layout,
+              second: { type: 'terminal', terminalId: terminals[i].id },
+            }
+          }
+          newSplitLayouts[worktreePath] = layout
+        }
+      }
+
+      setState(s => ({
+        ...s,
+        terminals: newTerminals,
+        activeTerminalId: newTerminals[0]?.id || null,
+        splitLayouts: newSplitLayouts,
+      }))
+
+      // Re-enable saving after a short delay
+      setTimeout(() => {
+        skipSaveRef.current = false
+      }, 100)
+    } catch (err) {
+      setState(s => ({
+        ...s,
+        error: err instanceof Error ? err.message : 'Failed to open repository',
+      }))
+    }
+  }, [])
+
+  // Load recent repos and settings on mount
+  useEffect(() => {
+    window.api.store.getRecentRepos().then(repos => {
+      setState(s => ({ ...s, recentRepos: repos }))
+    })
+    loadSettings()
+  }, [loadSettings])
+
+  // Debounced save session on state changes
+  useEffect(() => {
+    if (!state.repoPath || skipSaveRef.current) return
+
+    const timeoutId = setTimeout(() => {
+      const session: RepoSessionState = {
+        repoPath: state.repoPath!,
+        repoName: state.repoPath!.split('/').pop() || 'Repository',
+        selectedWorktreePath: state.selectedWorktreePath,
+        splitLayouts: state.splitLayouts,
+        terminals: state.terminals.map(t => ({
+          worktreePath: t.worktreePath,
+          title: t.title,
+          isClaudeSession: t.isClaudeSession,
+          claudeStatus: t.claudeStatus,
+        })),
+        lastOpened: Date.now(),
+      }
+      window.api.store.saveSession(session).then(() => {
+        // Refresh recent repos list
+        window.api.store.getRecentRepos().then(repos => {
+          setState(s => ({ ...s, recentRepos: repos }))
+        })
+      })
+    }, 2000)
+
+    return () => clearTimeout(timeoutId)
+  }, [state.repoPath, state.selectedWorktreePath, state.splitLayouts, state.terminals])
+
   // Listen for Claude status changes from main process
   useEffect(() => {
-    const unsubscribe = window.api.pty.onClaudeStatus?.((ptyId, isClaude) => {
-      setClaudeSession(ptyId, isClaude)
+    const unsubscribe = window.api.pty.onClaudeStatus?.((ptyId, isClaude, status) => {
+      setClaudeSession(ptyId, isClaude, status)
     })
     return () => unsubscribe?.()
   }, [setClaudeSession])
@@ -406,19 +769,29 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const value: AppContextValue = {
     ...state,
     openRepo,
+    openRecentRepo,
     selectWorktree,
     createWorktree,
+    removeWorktree,
     refreshWorktrees,
     addTerminal,
     removeTerminal,
     setActiveTerminal,
     setClaudeSession,
+    getNextTerminalNumber,
+    getNextClaudeNumber,
     splitTerminal,
     updateSplitRatio,
     moveTerminal,
     getSplitLayout,
     getTerminalsForWorktree,
     clearError,
+    loadSettings,
+    updateSettings,
+    openSettings,
+    closeSettings,
+    openInIDE,
+    openInTerminal,
   }
 
   return <AppContext.Provider value={value}>{children}</AppContext.Provider>

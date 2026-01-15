@@ -7,9 +7,10 @@ interface Props {
   ptyId: string
   isActive: boolean
   isVisible?: boolean // If not provided, defaults to isActive (for backward compat)
+  isModalOpen?: boolean // Prevent focus stealing when modal is open
 }
 
-export function TerminalPane({ ptyId, isActive, isVisible }: Props) {
+export function TerminalPane({ ptyId, isActive, isVisible, isModalOpen }: Props) {
   // If isVisible not provided, default to isActive (backward compat for tab-based view)
   const shouldBeVisible = isVisible ?? isActive
 
@@ -158,12 +159,12 @@ export function TerminalPane({ ptyId, isActive, isVisible }: Props) {
     }
   }, [shouldBeVisible, ptyId])
 
-  // Focus terminal when active
+  // Focus terminal when active (but not when modal is open)
   useEffect(() => {
-    if (isActive && terminalRef.current) {
+    if (isActive && terminalRef.current && !isModalOpen) {
       terminalRef.current.focus()
     }
-  }, [isActive])
+  }, [isActive, isModalOpen])
 
   return (
     <div

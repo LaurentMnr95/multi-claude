@@ -13,10 +13,19 @@ export class GitService {
     return this.parseWorktreeOutput(result)
   }
 
-  async createWorktree(branch: string, path: string, createBranch = false): Promise<void> {
+  async createWorktree(branch: string, path: string, createBranch = false, startPoint?: string): Promise<void> {
     const args = ['worktree', 'add']
-    if (createBranch) args.push('-b')
-    args.push(path, branch)
+    if (createBranch) {
+      // git worktree add -b <new-branch> <path> [<start-point>]
+      args.push('-b', branch, path)
+      if (startPoint) {
+        args.push(startPoint)
+      }
+    } else {
+      // git worktree add <path> <existing-branch>
+      args.push(path, branch)
+    }
+    console.log('Git worktree command:', args.join(' '))
     await this.git.raw(args)
   }
 
@@ -28,8 +37,30 @@ export class GitService {
   }
 
   async getBranches(): Promise<string[]> {
-    const result = await this.git.branch()
-    return [...result.all]
+    const result = await this.git.branch(['-a'])
+    // result.all includes both local and remote branches
+    // Remote branches are prefixed with "remotes/origin/"
+    // For worktree creation, we want local branches (preferred) and remote refs formatted as "origin/branch"
+    const branches = result.all
+      .map(b => b.replace(/^remotes\//, '').trim())
+      .filter(b => b && !b.includes('HEAD'))
+
+    // Deduplicate - prefer local over remote versions
+    const seen = new Set<string>()
+    const unique: string[] = []
+    for (const branch of branches) {
+      const localName = branch.replace(/^origin\//, '')
+      if (!seen.has(localName)) {
+        seen.add(localName)
+        // If it's not a remote ref, add it; otherwise only add if local doesn't exist
+        if (!branch.startsWith('origin/')) {
+          unique.push(branch)
+        } else if (!branches.includes(localName)) {
+          unique.push(branch)
+        }
+      }
+    }
+    return unique
   }
 
   private parseWorktreeOutput(output: string): Worktree[] {

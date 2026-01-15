@@ -1,9 +1,20 @@
 import { ipcMain, BrowserWindow } from 'electron'
 import { IPC_CHANNELS, PtySpawnOptions } from '../../shared/types'
 import { ptyManager } from '../services/PtyManager'
+import * as fs from 'fs'
+import * as path from 'path'
+
+const logFile = path.join(process.cwd(), 'pty-debug.log')
+function debugLog(msg: string) {
+  const line = `[${new Date().toISOString()}] ${msg}\n`
+  fs.appendFileSync(logFile, line)
+}
 
 export function registerPtyHandlers(): void {
+  debugLog('[IPC] Registering PTY handlers')
+
   ipcMain.handle(IPC_CHANNELS.PTY_SPAWN, (_, options: PtySpawnOptions) => {
+    debugLog(`[IPC] PTY_SPAWN called with: ${JSON.stringify(options)}`)
     return ptyManager.spawn(options)
   })
 

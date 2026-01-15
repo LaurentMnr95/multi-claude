@@ -7,6 +7,10 @@ interface Props {
   canSplit: boolean
   sidebarVisible: boolean
   onToggleSidebar: () => void
+  onOpenInIDE: () => void
+  ideName: string | null
+  onOpenInTerminal: () => void
+  terminalName: string | null
 }
 
 export function TerminalTabs({
@@ -18,7 +22,14 @@ export function TerminalTabs({
   canSplit,
   sidebarVisible,
   onToggleSidebar,
+  onOpenInIDE,
+  ideName,
+  onOpenInTerminal,
+  terminalName,
 }: Props) {
+  const ideLabel = ideName ? `Open in ${ideName}` : 'Open in IDE'
+  const terminalLabel = terminalName ? `Open in ${terminalName}` : 'Open in Terminal'
+
   return (
     <div className="terminal-tabs">
       <button
@@ -58,6 +69,12 @@ export function TerminalTabs({
             </button>
           </div>
         )}
+        <button className="btn-text" onClick={onOpenInIDE} title={ideLabel}>
+          ✎ {ideLabel}
+        </button>
+        <button className="btn-text" onClick={onOpenInTerminal} title={terminalLabel}>
+          ⌘ {terminalLabel}
+        </button>
       </div>
     </div>
   )

@@ -14,6 +14,7 @@ interface TerminalPaneWrapperProps {
   onDragStart: (terminalId: string) => void
   onDragEnd: () => void
   onMoveTerminal: (sourceId: string, targetId: string, position: 'left' | 'right' | 'top' | 'bottom') => void
+  isModalOpen?: boolean
 }
 
 function TerminalPaneWrapper({
@@ -26,6 +27,7 @@ function TerminalPaneWrapper({
   onDragStart,
   onDragEnd,
   onMoveTerminal,
+  isModalOpen,
 }: TerminalPaneWrapperProps) {
   const [dropZone, setDropZone] = useState<DropZone>(null)
   const containerRef = useRef<HTMLDivElement>(null)
@@ -141,6 +143,7 @@ function TerminalPaneWrapper({
           ptyId={terminalId}
           isActive={isActive}
           isVisible={true}
+          isModalOpen={isModalOpen}
         />
       </div>
     </div>
@@ -159,6 +162,7 @@ interface SplitPaneProps {
   onDragStart: (terminalId: string) => void
   onDragEnd: () => void
   path?: number[]
+  isModalOpen?: boolean
 }
 
 export function SplitPane({
@@ -173,6 +177,7 @@ export function SplitPane({
   onDragStart,
   onDragEnd,
   path = [],
+  isModalOpen,
 }: SplitPaneProps) {
   const [isResizing, setIsResizing] = useState(false)
   const [localRatio, setLocalRatio] = useState<number | null>(null)
@@ -246,6 +251,7 @@ export function SplitPane({
         onDragStart={onDragStart}
         onDragEnd={onDragEnd}
         onMoveTerminal={onMoveTerminal}
+        isModalOpen={isModalOpen}
       />
     )
   }
@@ -278,6 +284,7 @@ export function SplitPane({
           onDragStart={onDragStart}
           onDragEnd={onDragEnd}
           path={[...path, 0]}
+          isModalOpen={isModalOpen}
         />
       </div>
       <div
@@ -302,6 +309,7 @@ export function SplitPane({
           onDragStart={onDragStart}
           onDragEnd={onDragEnd}
           path={[...path, 1]}
+          isModalOpen={isModalOpen}
         />
       </div>
     </div>

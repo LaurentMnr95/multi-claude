@@ -1,3 +1,6 @@
+// Claude Status Type
+export type ClaudeStatus = 'running' | 'waiting' | null
+
 // IPC Channel Constants
 export const IPC_CHANNELS = {
   // Git operations
@@ -18,6 +21,22 @@ export const IPC_CHANNELS = {
 
   // Dialog
   DIALOG_OPEN_FOLDER: 'dialog:openFolder',
+
+  // Store operations
+  STORE_GET_RECENT_REPOS: 'store:getRecentRepos',
+  STORE_GET_REPO_SESSION: 'store:getRepoSession',
+  STORE_SAVE_SESSION: 'store:saveSession',
+  STORE_REMOVE_REPO: 'store:removeRepo',
+
+  // Settings operations
+  SETTINGS_GET: 'settings:get',
+  SETTINGS_SET: 'settings:set',
+
+  // IDE operations
+  IDE_OPEN_PATH: 'ide:openPath',
+
+  // Terminal App operations
+  TERMINAL_OPEN_PATH: 'terminal:openPath',
 } as const
 
 // Worktree Types
@@ -35,6 +54,7 @@ export interface TerminalInstance {
   worktreePath: string
   title: string
   isClaudeSession: boolean
+  claudeStatus: ClaudeStatus
 }
 
 // Split Pane Types
@@ -66,11 +86,73 @@ export interface PtySpawnOptions {
   shell?: string
 }
 
+// Store Types - for persistence
+export interface SavedTerminal {
+  worktreePath: string
+  title: string
+  isClaudeSession: boolean
+  claudeStatus?: ClaudeStatus
+}
+
+export interface RepoSessionState {
+  repoPath: string
+  repoName: string
+  selectedWorktreePath: string | null
+  splitLayouts: WorktreeSplitLayout
+  terminals: SavedTerminal[]
+  lastOpened: number
+}
+
+// IDE Types
+export type IDEType = 'vscode' | 'cursor' | 'webstorm' | 'sublime' | 'custom'
+
+export interface IDEConfig {
+  type: IDEType
+  name: string
+  command: string
+}
+
+export const IDE_OPTIONS: IDEConfig[] = [
+  { type: 'vscode', name: 'Visual Studio Code', command: 'code' },
+  { type: 'cursor', name: 'Cursor', command: 'cursor' },
+  { type: 'webstorm', name: 'WebStorm', command: 'webstorm' },
+  { type: 'sublime', name: 'Sublime Text', command: 'subl' },
+]
+
+// Terminal App Types
+export type TerminalAppType = 'iterm' | 'terminal' | 'warp' | 'alacritty' | 'custom'
+
+export interface TerminalConfig {
+  type: TerminalAppType
+  name: string
+}
+
+export const TERMINAL_OPTIONS: TerminalConfig[] = [
+  { type: 'iterm', name: 'iTerm' },
+  { type: 'terminal', name: 'Terminal' },
+  { type: 'warp', name: 'Warp' },
+  { type: 'alacritty', name: 'Alacritty' },
+]
+
+// Settings Types
+export interface AppSettings {
+  defaultIDE: IDEType | null
+  customIDECommand: string | null
+  defaultTerminal: TerminalAppType | null
+  customTerminalCommand: string | null
+}
+
+export interface StoreSchema {
+  recentRepos: RepoSessionState[]
+  maxRecentRepos: number
+  settings: AppSettings
+}
+
 // API Types exposed to renderer
 export interface GitAPI {
   openRepo: () => Promise<string | null>
   listWorktrees: (repoPath: string) => Promise<Worktree[]>
-  createWorktree: (repoPath: string, branch: string, path: string) => Promise<Worktree[]>
+  createWorktree: (repoPath: string, branch: string, path: string, createBranch?: boolean, startPoint?: string) => Promise<Worktree[]>
   removeWorktree: (repoPath: string, worktreePath: string) => Promise<Worktree[]>
   getBranches: (repoPath: string) => Promise<string[]>
 }
@@ -82,12 +164,36 @@ export interface PtyAPI {
   kill: (ptyId: string) => Promise<void>
   onData: (callback: (ptyId: string, data: string) => void) => () => void
   onExit: (callback: (ptyId: string, exitCode: number) => void) => () => void
-  onClaudeStatus?: (callback: (ptyId: string, isClaude: boolean) => void) => () => void
+  onClaudeStatus?: (callback: (ptyId: string, isClaude: boolean, status: ClaudeStatus) => void) => () => void
+}
+
+export interface StoreAPI {
+  getRecentRepos: () => Promise<RepoSessionState[]>
+  getRepoSession: (repoPath: string) => Promise<RepoSessionState | null>
+  saveSession: (session: RepoSessionState) => Promise<void>
+  removeRepo: (repoPath: string) => Promise<void>
+}
+
+export interface SettingsAPI {
+  get: () => Promise<AppSettings>
+  set: (settings: Partial<AppSettings>) => Promise<void>
+}
+
+export interface IDEAPI {
+  openPath: (path: string) => Promise<void>
+}
+
+export interface TerminalAppAPI {
+  openPath: (path: string) => Promise<void>
 }
 
 export interface ElectronAPI {
   git: GitAPI
   pty: PtyAPI
+  store: StoreAPI
+  settings: SettingsAPI
+  ide: IDEAPI
+  terminalApp: TerminalAppAPI
 }
 
 declare global {

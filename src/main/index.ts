@@ -1,9 +1,15 @@
 import { app, BrowserWindow, shell } from 'electron'
 import { join } from 'path'
+import * as fs from 'fs'
 import { registerAllHandlers } from './ipc'
 import { setPtyMainWindow } from './ipc/pty.handlers'
 
-const isDev = process.env.NODE_ENV === 'development' || !app.isPackaged
+const logFile = join(process.cwd(), 'pty-debug.log')
+fs.writeFileSync(logFile, `[${new Date().toISOString()}] === Multi-Claude Main Process Starting ===\n`)
+
+console.log('=== Multi-Claude Main Process Starting ===')
+
+const isDev = process.env.NODE_ENV !== 'production' && !app.isPackaged
 
 let mainWindow: BrowserWindow | null = null
 
@@ -41,7 +47,7 @@ function createWindow(): void {
     mainWindow.loadURL('http://localhost:1706')
     mainWindow.webContents.openDevTools()
   } else {
-    mainWindow.loadFile(join(__dirname, '../dist/index.html'))
+    mainWindow.loadFile(join(__dirname, '../../dist/index.html'))
   }
 }
 

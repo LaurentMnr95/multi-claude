@@ -19,9 +19,12 @@ export function registerGitHandlers(): void {
 
   ipcMain.handle(
     IPC_CHANNELS.GIT_CREATE_WORKTREE,
-    async (_, { repoPath, branch, path }: { repoPath: string; branch: string; path: string }) => {
+    async (_, args: { repoPath: string; branch: string; path: string; createBranch?: boolean; startPoint?: string }) => {
+      console.log('createWorktree IPC received:', JSON.stringify(args))
+      const { repoPath, branch, path, createBranch, startPoint } = args
+      console.log('Destructured - createBranch:', createBranch, 'startPoint:', startPoint)
       const service = getOrCreateService(repoPath)
-      await service.createWorktree(branch, path)
+      await service.createWorktree(branch, path, createBranch === true, startPoint)
       return service.listWorktrees()
     }
   )

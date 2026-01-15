@@ -2,10 +2,11 @@ import { useState, useCallback, useRef, useEffect } from 'react'
 import { AppProvider, useApp } from './context/AppContext'
 import { Sidebar } from './components/Sidebar'
 import { MainArea } from './components/MainArea'
+import { SettingsModal } from './components/SettingsModal'
 import './styles.css'
 
 function AppContent() {
-  const { repoPath, error, clearError, openRepo } = useApp()
+  const { repoPath, error, clearError, openRepo, openRecentRepo, recentRepos, showSettingsModal, closeSettings } = useApp()
   const [sidebarWidth, setSidebarWidth] = useState(240)
   const [sidebarVisible, setSidebarVisible] = useState(true)
   const [isResizing, setIsResizing] = useState(false)
@@ -55,6 +56,25 @@ function AppContent() {
           <button className="btn-primary" onClick={openRepo}>
             Open Repository
           </button>
+
+          {recentRepos.length > 0 && (
+            <div className="recent-repos">
+              <h3>Recent</h3>
+              <ul className="recent-list">
+                {recentRepos.map(repo => (
+                  <li key={repo.repoPath}>
+                    <button
+                      className="recent-item"
+                      onClick={() => openRecentRepo(repo.repoPath)}
+                    >
+                      <span className="repo-name">{repo.repoName}</span>
+                      <span className="repo-path">{repo.repoPath}</span>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
         </div>
       </div>
     )
@@ -80,6 +100,7 @@ function AppContent() {
         />
       </div>
       <MainArea sidebarVisible={sidebarVisible} onToggleSidebar={toggleSidebar} />
+      {showSettingsModal && <SettingsModal onClose={closeSettings} />}
     </div>
   )
 }

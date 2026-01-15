@@ -1,5 +1,12 @@
 import { contextBridge, ipcRenderer } from 'electron'
-import { IPC_CHANNELS, ElectronAPI, PtySpawnOptions } from '../shared/types'
+import {
+  IPC_CHANNELS,
+  ElectronAPI,
+  PtySpawnOptions,
+  RepoSessionState,
+  AppSettings,
+  ClaudeStatus,
+} from '../shared/types'
 
 const api: ElectronAPI = {
   git: {
@@ -8,8 +15,8 @@ const api: ElectronAPI = {
     listWorktrees: (repoPath: string) =>
       ipcRenderer.invoke(IPC_CHANNELS.GIT_LIST_WORKTREES, repoPath),
 
-    createWorktree: (repoPath: string, branch: string, path: string) =>
-      ipcRenderer.invoke(IPC_CHANNELS.GIT_CREATE_WORKTREE, { repoPath, branch, path }),
+    createWorktree: (repoPath: string, branch: string, path: string, createBranch?: boolean, startPoint?: string) =>
+      ipcRenderer.invoke(IPC_CHANNELS.GIT_CREATE_WORKTREE, { repoPath, branch, path, createBranch, startPoint }),
 
     removeWorktree: (repoPath: string, worktreePath: string) =>
       ipcRenderer.invoke(IPC_CHANNELS.GIT_REMOVE_WORKTREE, { repoPath, worktreePath }),
@@ -45,12 +52,39 @@ const api: ElectronAPI = {
       return () => ipcRenderer.removeListener(IPC_CHANNELS.PTY_EXIT, handler)
     },
 
-    onClaudeStatus: (callback: (ptyId: string, isClaude: boolean) => void) => {
-      const handler = (_: Electron.IpcRendererEvent, ptyId: string, isClaude: boolean) =>
-        callback(ptyId, isClaude)
+    onClaudeStatus: (callback: (ptyId: string, isClaude: boolean, status: ClaudeStatus) => void) => {
+      const handler = (_: Electron.IpcRendererEvent, ptyId: string, isClaude: boolean, status: ClaudeStatus) =>
+        callback(ptyId, isClaude, status)
       ipcRenderer.on(IPC_CHANNELS.PTY_CLAUDE_STATUS, handler)
       return () => ipcRenderer.removeListener(IPC_CHANNELS.PTY_CLAUDE_STATUS, handler)
     },
+  },
+
+  store: {
+    getRecentRepos: () => ipcRenderer.invoke(IPC_CHANNELS.STORE_GET_RECENT_REPOS),
+
+    getRepoSession: (repoPath: string) =>
+      ipcRenderer.invoke(IPC_CHANNELS.STORE_GET_REPO_SESSION, repoPath),
+
+    saveSession: (session: RepoSessionState) =>
+      ipcRenderer.invoke(IPC_CHANNELS.STORE_SAVE_SESSION, session),
+
+    removeRepo: (repoPath: string) => ipcRenderer.invoke(IPC_CHANNELS.STORE_REMOVE_REPO, repoPath),
+  },
+
+  settings: {
+    get: () => ipcRenderer.invoke(IPC_CHANNELS.SETTINGS_GET),
+
+    set: (settings: Partial<AppSettings>) =>
+      ipcRenderer.invoke(IPC_CHANNELS.SETTINGS_SET, settings),
+  },
+
+  ide: {
+    openPath: (path: string) => ipcRenderer.invoke(IPC_CHANNELS.IDE_OPEN_PATH, path),
+  },
+
+  terminalApp: {
+    openPath: (path: string) => ipcRenderer.invoke(IPC_CHANNELS.TERMINAL_OPEN_PATH, path),
   },
 }
 
